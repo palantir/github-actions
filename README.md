@@ -14,7 +14,7 @@ Example usage:
 
 ```
   - id: go-dist-info
-    uses: palantir/godel/go-dist-info@v0.1.0
+    uses: palantir/godel/go-dist-info@0.1.0
     with:
       gopath: ${{ steps.set-gopath.outputs.GOPATH }}
       go-version: go1.23.3
@@ -28,7 +28,7 @@ Example usage:
 
 ```
   - id: go-dist-setup
-    uses: palantir/godel/go-dist-setup@v0.1.0
+    uses: palantir/godel/go-dist-setup@0.1.0
     with:
       gopath: ${{ steps.set-gopath.outputs.gopath }}
       go-version: ${{ steps.go-dist-info.outputs.go-dist-version }}
