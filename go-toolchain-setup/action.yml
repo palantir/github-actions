@@ -1,0 +1,145 @@
+name: Set up Go toolchain
+description: |
+  Selects the Go toolchain declared by a module's go.mod file (or an explicitly specified version), acquires it using
+  Go's native toolchain management, and activates it for subsequent steps with GOTOOLCHAIN=local.
+
+  Requires a Go 1.21 or later "go" executable on PATH to bootstrap acquisition. Module proxy and checksum database
+  settings (GOPROXY, GOSUMDB, and related variables) are inherited from the job environment.
+inputs:
+  working-directory:
+    description: |
+      Directory containing the go.mod file that determines the toolchain. Relative paths are resolved against the
+      workspace.
+    required: false
+    default: "."
+  go-version:
+    description: |
+      Exact toolchain version to use instead of selecting from go.mod (for example "go1.27.3" or "1.27.3"). Release
+      versions for Go 1.21 and later must include a patch version.
+    required: false
+    default: ""
+  if-no-go-mod:
+    description: |
+      Behavior when go-version is empty and the go.mod file does not exist: "fail" fails the step, and "skip" sets the
+      "found" output to "false" without changing the environment.
+    required: false
+    default: "fail"
+outputs:
+  found:
+    description: '"true" if a toolchain was selected and activated, "false" if setup was skipped.'
+    value: ${{ steps.select.outputs.found }}
+  version:
+    description: The selected toolchain version (for example "go1.27.3").
+    value: ${{ steps.select.outputs.version }}
+  goroot:
+    description: The GOROOT of the activated toolchain.
+    value: ${{ steps.activate.outputs.goroot }}
+runs:
+  using: "composite"
+  steps:
+    - id: select
+      shell: bash
+      env:
+        PARAM_WORKING_DIRECTORY: ${{ inputs.working-directory }}
+        PARAM_GO_VERSION: ${{ inputs.go-version }}
+        PARAM_IF_NO_GO_MOD: ${{ inputs.if-no-go-mod }}
+      run: |
+        set -euo pipefail
+        # shellcheck source=gotoolchain.sh
+        source "${GITHUB_ACTION_PATH}/gotoolchain.sh"
+
+        if [[ ${PARAM_IF_NO_GO_MOD} != fail && ${PARAM_IF_NO_GO_MOD} != skip ]]; then
+          echo "::error::Invalid if-no-go-mod value '${PARAM_IF_NO_GO_MOD}': must be 'fail' or 'skip'"
+          exit 1
+        fi
+
+        go_mod="${PARAM_WORKING_DIRECTORY%/}/go.mod"
+        if [[ -n ${PARAM_GO_VERSION} ]]; then
+          version=$(go_toolchain_version_normalize "${PARAM_GO_VERSION}" exact)
+          echo "${version} is the target toolchain version."
+          echo
+          echo "Toolchain selection parameters:"
+          echo "  go-version=${PARAM_GO_VERSION}: explicitly specified toolchain version"
+        elif [[ -f ${go_mod} ]]; then
+          directives=$(go_toolchain_version_directives "${go_mod}")
+          version=$(go_toolchain_version_from_go_mod "${go_mod}")
+          go_directive=${directives%%$'\n'*}
+          go_directive=${go_directive#go=}
+          toolchain_directive=${directives#*$'\n'toolchain=}
+          echo "${version} is the target toolchain version."
+          echo
+          echo "Toolchain selection parameters:"
+          echo "  go_mod=${go_mod}: module file to read"
+          echo
+          echo "Toolchain selection information:"
+          echo "  go=${go_directive}: go directive in the module file"
+          echo "  toolchain=${toolchain_directive}: toolchain directive in the module file"
+          echo "  selected=${version}: resolved target version"
+        elif [[ ${PARAM_IF_NO_GO_MOD} == skip ]]; then
+          echo "${go_mod} does not exist: skipping toolchain setup because if-no-go-mod is 'skip'."
+          echo "found=false" >> "${GITHUB_OUTPUT}"
+          exit 0
+        else
+          echo "::error::${go_mod} does not exist. Specify go-version, or set if-no-go-mod to 'skip'."
+          exit 1
+        fi
+
+        {
+          echo "found=true"
+          echo "version=${version}"
+        } >> "${GITHUB_OUTPUT}"
+
+    - id: activate
+      if: steps.select.outputs.found == 'true'
+      shell: bash
+      env:
+        PARAM_VERSION: ${{ steps.select.outputs.version }}
+      run: |
+        set -euo pipefail
+
+        if ! bootstrap=$(command -v go); then
+          echo "::error::No 'go' executable on PATH: a Go 1.21 or later bootstrap is required."
+          exit 1
+        fi
+        # Go releases before 1.21 do not recognize GOTOOLCHAIN and report an empty value for it.
+        if [[ $(GOTOOLCHAIN=local "${bootstrap}" env GOTOOLCHAIN) != local ]]; then
+          echo "::error::Bootstrap ${bootstrap} does not support toolchain selection: Go 1.21 or later is required."
+          exit 1
+        fi
+        echo "Bootstrap Go information:"
+        echo "  go=${bootstrap}: location of the bootstrap Go executable"
+        echo "  version=$(GOTOOLCHAIN=local "${bootstrap}" env GOVERSION): version of the bootstrap Go executable"
+        echo
+
+        # Acquire from an empty directory so that project and workspace settings cannot affect the result.
+        tmp_dir=$(mktemp -d)
+        trap 'rm -rf "${tmp_dir}"' EXIT
+        goroot=$(cd "${tmp_dir}" && env -u GOROOT GOWORK=off GO111MODULE=on GOFLAGS= GOTOOLCHAIN="${PARAM_VERSION}" \
+          "${bootstrap}" env GOROOT)
+        if [[ ! -x ${goroot}/bin/go ]]; then
+          echo "::error::Acquired toolchain at '${goroot}' does not contain an executable bin/go."
+          exit 1
+        fi
+
+        echo "${goroot}/bin" >> "${GITHUB_PATH}"
+        {
+          echo "GOROOT=${goroot}"
+          echo "GOTOOLCHAIN=local"
+          echo "GOWORK=off"
+        } >> "${GITHUB_ENV}"
+        echo "goroot=${goroot}" >> "${GITHUB_OUTPUT}"
+        echo "Activated ${PARAM_VERSION} at ${goroot} with GOTOOLCHAIN=local and GOWORK=off for subsequent steps."
+
+    - id: verify
+      if: steps.select.outputs.found == 'true'
+      shell: bash
+      env:
+        PARAM_VERSION: ${{ steps.select.outputs.version }}
+      run: |
+        set -euo pipefail
+        got=$(go env GOVERSION)
+        if [[ ${got} != "${PARAM_VERSION}" ]]; then
+          echo "::error::Expected Go ${PARAM_VERSION}, but 'go env GOVERSION' reports ${got} ($(command -v go))."
+          exit 1
+        fi
+        go env
