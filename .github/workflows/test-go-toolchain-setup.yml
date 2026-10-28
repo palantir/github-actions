@@ -1,0 +1,108 @@
+name: Test go-toolchain-setup
+
+on:
+  pull_request:
+  push:
+    branches:
+      - develop
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Set up bootstrap Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: stable
+          cache: false
+
+      - name: Toolchain directive
+        id: toolchain-directive
+        uses: ./go-toolchain-setup
+        with:
+          working-directory: go-toolchain-setup/testdata/toolchain-directive
+      - name: Verify toolchain directive
+        shell: bash
+        env:
+          FOUND: ${{ steps.toolchain-directive.outputs.found }}
+          VERSION: ${{ steps.toolchain-directive.outputs.version }}
+          GOROOT_OUTPUT: ${{ steps.toolchain-directive.outputs.goroot }}
+        run: |
+          set -euo pipefail
+          test "${FOUND}" = true
+          test "${VERSION}" = go1.25.5
+          test "$(go env GOVERSION)" = go1.25.5
+          test "$(go env GOROOT)" = "${GOROOT_OUTPUT}"
+          test "${GOTOOLCHAIN}" = local
+          test "${GOWORK}" = off
+
+      - name: Go directive
+        id: go-directive
+        uses: ./go-toolchain-setup
+        with:
+          working-directory: go-toolchain-setup/testdata/go-directive
+      - name: Verify go directive
+        shell: bash
+        env:
+          VERSION: ${{ steps.go-directive.outputs.version }}
+        run: |
+          set -euo pipefail
+          test "${VERSION}" = go1.25.0
+          test "$(go env GOVERSION)" = go1.25.0
+
+      - name: Explicit version
+        id: explicit
+        uses: ./go-toolchain-setup
+        with:
+          working-directory: go-toolchain-setup/testdata/no-go-mod
+          go-version: "1.24.5"
+      - name: Verify explicit version
+        shell: bash
+        env:
+          VERSION: ${{ steps.explicit.outputs.version }}
+        run: |
+          set -euo pipefail
+          test "${VERSION}" = go1.24.5
+          test "$(go env GOVERSION)" = go1.24.5
+
+      - name: Missing go.mod with skip
+        id: skip
+        uses: ./go-toolchain-setup
+        with:
+          working-directory: go-toolchain-setup/testdata/no-go-mod
+          if-no-go-mod: skip
+      - name: Verify missing go.mod with skip
+        shell: bash
+        env:
+          FOUND: ${{ steps.skip.outputs.found }}
+        run: |
+          set -euo pipefail
+          test "${FOUND}" = false
+          # The previously activated toolchain remains active.
+          test "$(go env GOVERSION)" = go1.24.5
+
+      - name: Missing go.mod with fail
+        id: fail
+        continue-on-error: true
+        uses: ./go-toolchain-setup
+        with:
+          working-directory: go-toolchain-setup/testdata/no-go-mod
+      - name: Invalid explicit version
+        id: invalid
+        continue-on-error: true
+        uses: ./go-toolchain-setup
+        with:
+          go-version: go1.27
+      - name: Verify failures
+        shell: bash
+        env:
+          FAIL_OUTCOME: ${{ steps.fail.outcome }}
+          INVALID_OUTCOME: ${{ steps.invalid.outcome }}
+        run: |
+          set -euo pipefail
+          test "${FAIL_OUTCOME}" = failure
+          test "${INVALID_OUTCOME}" = failure
