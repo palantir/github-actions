@@ -1,5 +1,10 @@
 #!/usr/bin/env bash
 
+# This file is managed by Excavator.
+# Do not modify it: changes are overwritten.
+# To change the logic, update the github.com/palantir/pkg/gotoolchain module.
+# To change where this file is located, contact the excavator check maintainers.
+
 # Copyright (c) 2026 Palantir Technologies. All rights reserved.
 # Use of this source code is governed by a BSD-style
 # license that can be found in the LICENSE file.
